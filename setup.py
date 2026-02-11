@@ -1,0 +1,76 @@
+import setuptools
+
+# Omniboxes server dependencies
+omnibox_requires = [
+    "fastapi[standard]",
+    "httpx",
+    "Pillow==11.2.1",
+    "playwright",
+    "redis",
+    "Requests==2.32.3",
+    "psutil==7.0.0",
+]
+
+# Training / webgym pipeline dependencies
+train_requires = [
+    "aiohttp==3.11.13",
+    "boto3",
+    "botocore",
+    "click==8.1.7",
+    "fitz==0.0.1.dev2",
+    "gradio==5.29.0",
+    "gym==0.26.2",
+    "hydra-core==1.3.2",
+    "nltk==3.9.1",
+    "omegaconf==2.3.0",
+    "paramiko==3.5.1",
+    "peft==0.14.0",
+    "Pillow==11.2.1",
+    "psutil==7.0.0",
+    "Requests==2.32.3",
+    "setuptools==78.1.0",
+    "tqdm==4.67.1",
+    "webdriver_manager==4.0.2",
+    "tenacity",
+    "ipython",
+    "ipywidgets",
+    "wandb",
+    "fastparquet",
+    "matplotlib",
+    "antlr4-python3-runtime==4.9.3",
+    "flask",
+    "httpx",
+    "ipykernel",
+    "torch",
+    "transformers==4.57.1",
+    "vllm",
+    "openai",
+    "pandas",
+    "numpy",
+]
+
+setuptools.setup(
+    name="webgym",
+    version='1.0.0',
+    author=("Hao Bai"),
+    description="A scalable reinforcement learning framework for training web automation agents using vision-language models.",
+    long_description=open("README.md", "r", encoding='utf-8').read(),
+    long_description_content_type="text/markdown",
+    keywords='webgym',
+    license='MIT',
+    packages=setuptools.find_packages(),
+    install_requires=[],
+    extras_require={
+        "omnibox": omnibox_requires,
+        "train": train_requires,
+        "all": omnibox_requires + train_requires,
+    },
+    include_package_data=True,
+    python_requires='>=3.10',
+    classifiers=[
+        'Intended Audience :: Science/Research',
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python :: 3',
+        'Topic :: Scientific/Engineering :: Artificial Intelligence',
+    ],
+)

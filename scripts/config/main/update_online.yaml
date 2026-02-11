@@ -1,0 +1,65 @@
+defaults:
+  - default
+  - _self_
+
+log_config:
+  run_name: 'webgym-<your-run-name>'
+  wandb_key_env_var: "WANDB_API_KEY"  # Environment variable containing WandB API key
+  entity_name: "<your-wandb-entity-name>"  # WandB entity/team name (set to your username or team)
+
+vllm_server_url: "http://localhost:8999"
+
+model_config:
+  model_type: "qwen3-instruct" # Options: "qwen3-instruct", "qwen3-think"
+
+algorithm_config:
+  # Output
+  model_output_name: "model.pt"  # Name of the output model directory
+
+  # Online RL data sampling
+  positive_samples_to_train: 1800 # ~40% of training-eligible steps from 4 iterations, sampled with recency bias
+  recency_bias_power: 2
+
+  # LLaMA-Factory training hyperparameters
+  cutoff_len: 16384  # Maximum sequence length (matching vLLM config)
+  per_device_train_batch_size: 3  # Lower batch size for vision models
+  per_device_eval_batch_size: 3  # Larger batch size for evaluation (no gradients)
+  gradient_accumulation_steps: 4  # Compensate with more accumulation
+  learning_rate: 1e-6
+  max_grad_norm: 1.0
+  weight_decay: 0.01  # L2 regularization to prevent overfitting
+  num_train_epochs: 2  # Train for 2 epochs per iteration
+  logging_steps: 1
+  warmup_steps: 30  # Fixed warmup steps (not ratio-based)
+  lr_scheduler_type: "constant_with_warmup"  # Flat LR after warmup, consistent across iterations
+
+  # Evaluation settings
+  do_eval: false  # Disable evaluation during online training
+  eval_strategy: "epoch"  # Evaluate at end of each epoch (when do_eval is true)
+  val_split_ratio: 0.05  # Use 5% of data for validation
+
+  # Save configs - save only at end of training for disk efficiency
+  # Using save_strategy="steps" with very high save_steps guarantees final checkpoint
+  # while avoiding intermediate saves. HF Trainer always saves at end when using "steps".
+  save_strategy: "steps"
+  save_steps: 999999  # Set extremely high so it only triggers at end
+  save_total_limit: 1  # Keep only the final checkpoint to save disk space
+  save_only_model: False  # Save optimizer and scheduler states for resumable training
+
+  # Data loading settings
+  preprocessing_num_workers: 16
+  dataloader_num_workers: 2
+
+  # Memory optimization
+  gradient_checkpointing: False  # Trade compute for memory
+
+  # Performance settings
+  bf16: True  # Use bfloat16 precision
+  remove_unused_columns: False
+  dataloader_pin_memory: True
+  plot_loss: False  # Disable built-in plotting (using wandb instead)
+
+  # Misc settings
+  deepspeed_config_filename: "ds_config_b200_zero1.json"  # Relative to scripts/config/deepspeed/
+  min_token_length: 10  # Minimum HuggingFace token length validation
+  report_to: "wandb"  # Logging backend

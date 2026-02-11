@@ -1,0 +1,46 @@
+defaults:
+  - default
+  - rollout
+  - _self_
+
+model_config:
+  model_type: "qwen3-instruct" # Options: "qwen3-instruct", "qwen3-think"
+
+env_config:
+  server_size: 64 # must be smaller than task rollout size
+  max_vllm_sessions: 128 # this is experimental. set to same as server_size for now.
+
+  # HTTP pool configuration - one pool per operation type
+  http_pools:
+    # once per task
+    metadata: 128          # Screen dimensions
+    navigate: 128          # Initial navigation to website
+    allocate: 4           # Instance allocation
+    release: 4            # Instance cleanup/release
+    # once per step
+    screenshot: 128       # Screenshot capture (most frequent, can be slow)
+    ac_tree: 128          # Accessibility tree retrieval
+    page_metadata: 128    # Page title/URL (once per step)
+    execute: 128          # Action execution (click, type, scroll)
+
+  split: "train" # "train" or "test", can be set by upperstream command line argument
+
+  # Max steps per difficulty category (easy: 1-3, medium: 4-6, hard: 7+)
+  train_difficulty_max_steps:
+    easy: 10
+    medium: 20
+    hard: 30
+  test_difficulty_max_steps: []
+
+  # Trajectory checkpoint saving during collection
+  save_traj_progress: true  # Disable checkpoint saving
+  save_every_percent: 25 # equivalent to no checkpoint saving
+  test_tasks_repeat_times: 0 # set to 0 for train set rollout collection
+
+  train_tasks_rollout_size: 1024
+  test_tasks_rollout_size: 0 # set to 0 for test set rollout collection
+
+  train_tasks_sampler: "uniform" # Options: "uniform", "ratio"
+
+  train_tasks: "train.jsonl"
+  test_tasks: ""

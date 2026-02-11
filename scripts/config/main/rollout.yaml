@@ -1,0 +1,50 @@
+defaults:
+  - default
+  - _self_
+
+policy_config:
+  checkpoint_path: "model.pt"  # Model checkpoint to use for rollout
+
+env_config:
+  cpu_cluster_token_env_var: "CPU_CLUSTER_TOKEN"
+  host_ip: "<your-host-ip>"
+  master_port: 7000
+  vllm_server_url: "http://localhost:8999"
+  verbose: False
+  use_rich_actree: False
+  
+  wait_timeout: 2400      # seconds - how long to wait in HTTP queue for a worker to become available
+  operation_timeout: 120  # seconds - how long the actual HTTP operation can take once it starts executing (increased for heavy load)
+  max_retries: 2          # number of retries before giving up for all HTTP operations (increased to handle blank screenshots after actions)
+  vllm_timeout: 240      # seconds - timeout specifically for vLLM requests
+
+  # Async processing queue sizes
+  evaluation_workers: 16         # Number of concurrent trajectory evaluation workers
+  screenshot_comparison_workers: 32  # Number of concurrent screenshot comparison workers
+
+  instance_lifetime_max: 50 # in minutes
+  # Timeout configurations
+  task_timeout_minutes: 300  # Maximum time per individual task (includes queue waiting + execution)
+
+  # 98% completion rule - kill remaining tasks when 98% are finished
+  completion_threshold: 0.95  # Percentage of tasks that must be finished to trigger shutdown, use smaller ratio for debugging to avoid hanging
+  completion_grace_period: 30  # Seconds to wait before killing remaining tasks
+
+# Evaluator API configuration
+# Default settings apply to all tasks unless overridden per-task
+# For OpenAI: model: "gpt-4o-mini", openai_api_key_env_var: "OPENAI_API_KEY"
+openai_config:
+  # Default configuration (used by all tasks unless overridden)
+  model: "gemini-3-flash-preview"  # Options: "gpt-4o-mini", "gpt-4o", "gemini-3-flash-preview", etc.
+  openai_api_key_env_var: "GEMINI_API_KEY"
+  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+  # Per-task overrides (optional - omit to use defaults above)
+  # Each can specify: model, openai_api_key_env_var, base_url
+  keypoint_detection:
+    model: "gemini-2.5-flash-lite"  # For judging which screenshots to submit (N-1 calls)
+  blocking_detection:
+    model: "gemini-2.5-flash-lite"  # For detecting CAPTCHA/blocking pages (1 call)
+  evaluation:
+    model: "gemini-3-flash-preview"  # For criterion_a, criterion_b, and reference_answer
+

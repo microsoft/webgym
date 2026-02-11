@@ -1,0 +1,47 @@
+scripts/outputs/
+scripts/wandb/
+scripts/download/
+__pycache__/
+# .gitignore
+# exclude all .pt files
+*.pt
+*.out
+*.pyc
+*.png
+!figures/*
+*.pdf
+*.html
+
+*.log
+*.pid
+
+# exclude any .wandb logs
+*.wandb
+
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+scripts/outputs/
+outputs/
+scripts/wandb/
+tree.out
+# Core dumps
+core
+core.*
+scripts/core
+analysis/core
+node_modules/
+
+*.parquet
+*.tex
+*.log
+*.npz
+.nfs*
+*.nfs*
+/docs/_build/
+/docs/_static
+.gradio/
+.claude/
+omniboxes/deploy/redis-data/

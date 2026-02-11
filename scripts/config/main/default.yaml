@@ -1,0 +1,21 @@
+save_path: '<save_path_here>' # the path to save the model checkpoint/trajectory_outputs
+data_path: '<data_path_here>' # the path to read-only shared data (task files, HuggingFace cache, etc.)
+
+model_config:
+  model_type: "qwen3-instruct"  # Options: "qwen3-instruct", "qwen3-think"
+  prompt_version: "complete"  # Options: "vanilla", "complete"
+
+policy_config:
+  huggingface_token_env_var: "HF_TOKEN"
+  base_model: null # placeholder, will be set in run.sh
+  checkpoint_path: "model.pt"
+  # Turn sequences are automatically loaded from config/model/turn_sequences.json based on model type
+  max_new_tokens: 3072
+
+  temperature: 1
+  top_p: 0.99
+  top_k: 2
+  min_p: 0
+
+context_config:
+  interaction_mode: "coordinates" # or "set_of_marks"
