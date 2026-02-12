@@ -85,9 +85,14 @@ Install Dependencies
       playwright install chromium
       playwright install-deps chromium
 
-4. **(Optional) Install nginx:**
+4. **(Optional) Install nginx for production deployments:**
 
-   The ``--nginx`` flag is experimental and not yet supported.
+   For production deployments with external access, the ``--nginx`` flag sets up an nginx reverse proxy.
+   This requires ``sudo`` access and ``nginx`` to be installed:
+
+   .. code-block:: bash
+
+      sudo apt-get install nginx
 
 Verify Installation
 -------------------

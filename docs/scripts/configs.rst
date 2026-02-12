@@ -18,7 +18,30 @@ Config files are located in ``scripts/config/main/``.
        └── update_online.yaml       # Training config (hyperparameters, data sampling)
 
 Each config file uses ``defaults:`` to inherit from parent configs. Settings in child
-configs override parent values.
+configs override parent values. For example, ``rollout_train.yaml`` inherits from
+``rollout.yaml`` which inherits from ``default.yaml``:
+
+.. code-block:: yaml
+
+   # default.yaml defines base policy settings:
+   policy_config:
+     temperature: 1
+     max_new_tokens: 3072
+
+   # rollout.yaml inherits default.yaml and adds env settings:
+   defaults:
+     - default
+   env_config:
+     server_size: 64
+
+   # rollout_train.yaml inherits default.yaml and rollout.yaml, then overrides specifics:
+   defaults:
+     - default
+     - rollout
+   env_config:
+     split: "train"
+     train_tasks_rollout_size: 1024
+   # temperature and server_size are still inherited from the parents
 
 ``save_path``
    Root directory for outputs (set via ``--log-path``)
@@ -57,8 +80,12 @@ configs override parent values.
    * ``vllm_timeout``: vLLM request timeout (default: 240)
    * ``evaluation_workers``: Concurrent trajectory evaluation workers (default: 16)
    * ``screenshot_comparison_workers``: Concurrent screenshot comparison workers (default: 32)
-   * ``completion_threshold``: Percentage of tasks to complete before killing stragglers (default: 0.95)
-   * ``completion_grace_period``: Seconds to wait before killing remaining tasks (default: 30)
+   * ``completion_threshold``: Fraction of tasks to complete before killing stragglers (default: 0.95).
+     For example, with 1024 tasks and ``completion_threshold=0.95``, once 973 tasks finish, the remaining
+     51 slow tasks enter the grace period.
+   * ``completion_grace_period``: Seconds to wait after the threshold is reached before force-killing
+     remaining tasks (default: 30). Continuing the example above, the 51 remaining tasks get 30 more
+     seconds to finish; any still running after that are terminated.
    * ``instance_lifetime_max``: Maximum browser instance lifetime in minutes (default: 50)
    * ``task_timeout_minutes``: Maximum task timeout in minutes (default: 300)
    * ``server_size``: Browser instances per batch (default: 64)
@@ -92,13 +119,13 @@ configs override parent values.
           execute: 64            # Action execution (click, type, scroll)
           allocate: 4            # Instance allocation
           release: 4             # Instance cleanup/release
-   * ``max_vllm_sessions``: Concurrent vLLM requests (default: 128 train, 64 test)
+   * ``max_vllm_sessions``: Concurrent vLLM requests (default: 128 train, 64 test) (experimental, not supported yet, so use ``server_size`` instead)
    * ``split``: Dataset split (``train`` or ``test``)
    * ``train_difficulty_max_steps``: Max steps per difficulty (easy: 10, medium: 20, hard: 30)
    * ``test_difficulty_max_steps``: Max steps per difficulty (easy: 30, medium: 50, hard: 70)
    * ``train_tasks_rollout_size``: Tasks per train batch (default: 1024)
-   * ``test_tasks_rollout_size``: Tasks per eval batch (default: -1 for all)
-   * ``test_tasks_repeat_times``: Repeat each test task N times (default: 1)
+   * ``test_tasks_rollout_size``: Tasks per eval batch (default: -1 for all in test config, 0 in train config)
+   * ``test_tasks_repeat_times``: Repeat each test task N times (default: 1 in test config, 0 in train config)
    * ``train_tasks_sampler``: Task sampling strategy (``uniform`` or ``ratio``)
    * ``train_tasks``: Train task file (default: ``train.jsonl``)
    * ``test_tasks``: Test task file (default: ``test.jsonl``)
@@ -162,11 +189,13 @@ configs override parent values.
    Logging settings:
 
    * ``run_name``: WandB run name prefix
+   * ``wandb_key_env_var``: Environment variable name containing WandB API key (default: ``WANDB_API_KEY``)
+   * ``entity_name``: WandB entity/team name
 
 ``algorithm_config``
    Training hyperparameters:
 
-   * ``samples_to_train``: Samples per training iteration (default: 16384)
+   * ``positive_samples_to_train``: Positive samples per training iteration (default: 1800)
    * ``recency_bias_power``: Bias toward recent trajectories (default: 2)
    * ``cutoff_len``: Maximum sequence length (default: 16384)
    * ``per_device_train_batch_size``: Batch size per GPU (default: 3)
@@ -176,7 +205,7 @@ configs override parent values.
    * ``warmup_steps``: LR warmup steps (default: 30)
    * ``lr_scheduler_type``: Scheduler type (default: ``constant_with_warmup``)
    * ``val_split_ratio``: Validation data fraction (default: 0.05)
-   * ``deepspeed_config_filename``: DeepSpeed config file (default: ``ds_config_b200_zero2.json``)
+   * ``deepspeed_config_filename``: DeepSpeed config file (default: ``ds_config_b200_zero1.json``)
    * ``report_to``: Logging backend (default: ``wandb``)
 
 DeepSpeed Configs
@@ -205,10 +234,10 @@ distributed training memory optimization and offloading strategies.
      - H100 GPUs, full parameter partitioning + CPU offload
    * - ``ds_config_b200_zero1.json``
      - 1
-     - B200 GPUs, optimizer state partitioning only
+     - B200 GPUs, optimizer state partitioning only (default)
    * - ``ds_config_b200_zero2.json``
      - 2
-     - B200 GPUs, optimizer + gradient partitioning (default)
+     - B200 GPUs, optimizer + gradient partitioning
    * - ``ds_config_b200_zero3.json``
      - 3
      - B200 GPUs, full partitioning

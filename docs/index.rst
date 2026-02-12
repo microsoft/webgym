@@ -31,9 +31,10 @@ WebGym documentation
    :caption: Launcher Scripts
 
    scripts/run_script
+   scripts/run_script_multinode
+   scripts/configs
    scripts/rollout_script
    scripts/update_script
-   scripts/configs
 
 .. toctree::
    :maxdepth: 2
@@ -43,7 +44,7 @@ WebGym documentation
 
 .. toctree::
    :maxdepth: 2
-   :caption: RL Pipeline Components
+   :caption: RL Pipeline (Optional Read)
 
    rl_pipeline/rl_pipeline
    rl_pipeline/rl_models

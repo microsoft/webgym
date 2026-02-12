@@ -239,9 +239,9 @@ class PlaywrightInstance(InstanceBase):
                     return {"error": "No screenshot info available"}
                     
             elif command_type == "screenshot":
-                # Format: {"use_sequential_ids": true}
-                use_sequential = args.get("use_sequential_ids", True)
-                screenshot_buffer = await self._screenshot(use_sequential_ids=use_sequential)
+                # Format: {"interaction_mode": "set_of_marks"}
+                interaction_mode = args.get("interaction_mode", "set_of_marks")
+                screenshot_buffer = await self._screenshot(interaction_mode=interaction_mode)
                 return {"status": "screenshot_taken"}
                 
             else:

@@ -34,7 +34,7 @@ The ``ContextManager`` class (``context_manager.py``) is the central component t
    from webgym.context import ContextManager
 
    context_manager = ContextManager(
-       context_config={'interaction_mode': 'coordinates'},
+       context_config={'interaction_mode': 'coordinates'},  # default is 'set_of_marks'
        model_config={'model_type': 'qwen3-instruct'},
        verbose=True
    )

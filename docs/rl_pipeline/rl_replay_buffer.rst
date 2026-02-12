@@ -68,8 +68,14 @@ Data Components
 
 ``webgym/data/components.py`` defines core data structures:
 
-- ``Task``: Task description and metadata
-- ``Observation``: Screenshot and page state
-- ``Action``: Agent action (click, type, scroll, etc.)
-- ``Response``: Model response with thinking and action
-- ``Reward``: Task completion reward
+- ``Task``: Task description and metadata (task_name, domain, subdomain, website, difficulty, evaluator_reference, reference_answer, attempt_level, task_id, max_steps, trajectory_index)
+- ``Observation``: Screenshot and page state (task, image_path, ac_tree, page_metadata)
+- ``Action``: Agent action (action, action_string)
+- ``Response``: Model response (raw_response, answering_tokens, raw_prompt)
+- ``Reward``: Task completion reward (reward, evaluation, is_blocked, submit, submission_judgment)
+
+**Key Methods:**
+
+``get_training_samples(num_samples=None, recency_bias_power=1.0)``
+   Returns training-eligible samples with recency-weighted sampling. Samples from successful
+   trajectory steps. If ``recency_bias_power`` is 1.0, uses uniform random sampling.
