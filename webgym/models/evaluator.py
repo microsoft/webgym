@@ -152,7 +152,16 @@ class Evaluator:
         """
         # STEP 0: Judge which images should be submitted
         print("📋 Step 0: Judging which images contain necessary task information...")
-        self.judge_submission_images(trajectory)
+        try:
+            self.judge_submission_images(trajectory)
+        except Exception as e:
+            print(f"⚠️ Image judging crashed (content filter?), marking all images for submission: {e}")
+            for step in trajectory:
+                if step.get('observation') and hasattr(step['observation'], 'image_path'):
+                    if 'reward' not in step or step['reward'] is None:
+                        step['reward'] = Reward(reward=0, evaluation="", submit=True, submission_judgment="fallback")
+                    else:
+                        step['reward'].submit = True
 
         # STEP 1: Check for blocking ONCE for the entire trajectory (independent of rubrics)
         is_blocked = self.check_if_blocked(trajectory)

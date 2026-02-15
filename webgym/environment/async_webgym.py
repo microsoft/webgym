@@ -730,6 +730,8 @@ class AsyncWebGym:
                                 reached_checkpoints.add(threshold)
                                 print(f"✅ Checkpoint reached: {int(threshold*100)}% ({completed_count}/{self.total_tasks})")
                                 try:
+                                    # Note: reward=-1 placeholders are filtered out by checkpoint_save in checkpoint_utils.py
+                                    # They will be saved at the next checkpoint once evaluation completes
                                     checkpoint_callback(completed_count, self.total_tasks, self.trajectories)
                                 except Exception as e:
                                     print(f"⚠️ Checkpoint save failed at {int(threshold*100)}%: {e}")

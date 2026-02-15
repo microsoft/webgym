@@ -65,6 +65,15 @@ def create_fixed_checkpoint_callback(trajectory_file, checkpoint_state, save_pat
             if not traj or len(traj) == 0:
                 continue
 
+            # Skip trajectories still pending async evaluation (reward=-1 placeholder)
+            # These will be saved at the next checkpoint or final save once evaluation completes
+            try:
+                last_reward = traj[-1].get('reward')
+                if last_reward is not None and hasattr(last_reward, 'reward') and last_reward.reward == -1:
+                    continue
+            except (IndexError, KeyError, AttributeError):
+                pass
+
             # Get trajectory_index from trajectory (unique per task slot, even for repeated tasks)
             try:
                 task = traj[0]['observation'].task
@@ -281,6 +290,14 @@ def handle_grace_period_expiry_fixed(
     for traj in all_valid:
         if not traj or len(traj) == 0:
             continue
+
+        # Skip trajectories still pending async evaluation (reward=-1 placeholder)
+        try:
+            last_reward = traj[-1].get('reward')
+            if last_reward is not None and hasattr(last_reward, 'reward') and last_reward.reward == -1:
+                continue
+        except (IndexError, KeyError, AttributeError):
+            pass
 
         # Get trajectory_index from trajectory (unique per task slot, distinguishes repeats)
         try:
