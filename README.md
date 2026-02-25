@@ -68,7 +68,7 @@ You're **highly suggested** to read the content below to understand the designs 
 
 ## Getting Started
 
-Please refer to our <a href="https://webgym.readthedocs.io/en/latest/index.html"><b>ReadTheDocs documentation</b></a> for a quick start. It contains comprehensive information about this codebase.
+Please refer to our <a href="https://webgym.readthedocs.io/en/latest/index.html"><b>ReadTheDocs documentation</b></a> for a quick start. It contains comprehensive information about this codebase. You can also explore the codebase interactively via <a href="https://deepwiki.com/microsoft/webgym"><b>DeepWiki</b></a>.
 
 ### Hosting the ReadTheDocs Server
 
