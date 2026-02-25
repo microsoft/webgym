@@ -4,10 +4,10 @@
 
 [![Paper](https://img.shields.io/badge/Paper-red)](https://arxiv.org/abs/2601.02439)
 [![Documentation Status](https://app.readthedocs.org/projects/webgym/badge/?version=latest)](https://webgym.readthedocs.io/en/latest/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/microsoft/webgym)
 [![Dataset](https://img.shields.io/badge/🤗%20Dataset-WebGym%20Tasks-orange)](https://huggingface.co/datasets/microsoft/webgym_tasks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/microsoft/webgym)
 
 </div>
 
