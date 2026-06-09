@@ -27,6 +27,8 @@
 
 AsyncWebRL trains vision-language web agents with efficient multi-step reinforcement learning. It is built on the [AReaL](https://github.com/inclusionAI/AReaL) async RL framework and sets a new open-source state of the art on the [WebGym](https://github.com/microsoft/webgym) out-of-distribution test split.
 
+Note, for the original WebGym code, please go to the [`webgym` branch](https://github.com/microsoft/webgym/tree/webgym)
+
 ## Features
 
 **Asynchronous system — up to 2.9× training-throughput speedup** over the
