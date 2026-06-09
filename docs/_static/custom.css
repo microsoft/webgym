@@ -1,0 +1,34 @@
+/* AsyncWebRL docs — light tweaks on top of the Read the Docs theme. */
+
+/* Slightly wider content column for the code-heavy pages. */
+.wy-nav-content {
+    max-width: 60rem;
+}
+
+/* Tighter, monospace inline literals so version/path strings read well. */
+.rst-content code.literal,
+.rst-content tt.literal {
+    color: #b8860b;
+}
+
+/* Keep wide tables/code from overflowing on narrow screens. */
+.rst-content .highlight > pre {
+    overflow-x: auto;
+}
+
+/* Local-preview language link in the RTD sidebar search area. */
+.lang-switch-btn {
+    display: block;
+    width: calc(100% - 1.5rem);
+    margin: 0.6rem 0.75rem 0;
+    padding: 0.25rem 0.7rem;
+    text-align: center;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 0.25rem;
+    color: #fff;
+    font-size: 0.85rem;
+}
+.lang-switch-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}

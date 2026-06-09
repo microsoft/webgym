@@ -1,0 +1,44 @@
+# AsyncWebRL — verified package versions.
+#
+# This file is a *version spec*, not an install method. What matters is matching
+# these versions; HOW you install them — pip, uv, conda, a container, a Slurm
+# allocation, the right CUDA wheel index, building flash-attn from source — is up
+# to your environment.
+#
+# Verified end to end on H100 (sm90, CUDA 12.9) with Qwen3-VL-8B-Instruct.
+# Requires Python 3.12.
+
+# ── Correctness-critical CUDA / ML stack ─────────────────────────────────────
+# Getting these wrong silently produces garbage output or crashes.
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+transformers==5.2.0            # 5.3+ breaks Qwen3-VL get_rope_index; 5.6 breaks FSDP wrap
+sglang==0.5.12.post1          # 0.5.7 / 0.5.8 emit garbage ()\n;\n}) on Qwen3-VL (sm90)
+flashinfer-python==0.6.11.post1
+flash-attn==2.8.1             # build from source against your torch / CUDA ABI
+nvidia-cudnn-cu12>=9.15       # < 9.15 silently garbles Qwen3-VL vision features
+numpy<2.3                     # numba constraint
+
+# ── RL training framework (AReaL) ────────────────────────────────────────────
+ray[default]
+wandb>=0.25.0                 # 0.24 silently drops run data
+omegaconf==2.4.0.dev2
+hydra-core==1.4.0.dev1
+accelerate
+peft
+datasets>=3.0.0
+huggingface_hub
+torchdata
+torchao
+torchcodec
+torch_memory_saver==0.0.9
+
+# ── WebGym pipeline ──────────────────────────────────────────────────────────
+playwright                    # then: playwright install chromium
+qwen-agent
+Pillow>=11.0.0
+gym>=0.26.0
+gradio>=5.0.0
+openai
+requests>=2.31.0

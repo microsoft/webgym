@@ -5,24 +5,183 @@ from ..base.conversation_builder import ConversationBuilder
 class QwenConversationBuilder(ConversationBuilder):
     """Multi-turn conversation builder for Qwen3-VL"""
 
-    def __init__(self, interaction_mode: str, variant: str = "instruct", prompt_version: str = "vanilla"):
+    def __init__(
+        self,
+        interaction_mode: str,
+        variant: str = "instruct",
+        prompt_version: str = "vanilla",
+        history_window: int = 4,
+        keep_thinking_in_history: bool = False,
+    ):
         """
         Initialize Qwen conversation builder
 
         Args:
             interaction_mode: 'coordinates' or 'set_of_marks'
             variant: 'instruct' or 'thinking'
-            prompt_version: 'vanilla' or 'complete'
+            prompt_version: valid values depend on ``variant``.
+                instruct: 'vanilla' | 'memory-additive' | 'memory-compressive'
+                  - vanilla:            Action + tool_call
+                  - memory-additive:    Memory + Progress + Intention + Action +
+                                        tool_call, with append-only Memory.
+                  - memory-compressive: same 5-section layout but each step's
+                                        Memory compresses prior Memory down to
+                                        only the still-relevant facts.
+                  ('complete' is accepted as a deprecated alias for
+                   'memory-additive'.)
+                thinking: 'vanilla' | 'progress' | 'memory-additive' | 'memory-compressive'
+                  - vanilla:            Action + tool_call
+                  - progress:           Progress + Action + tool_call
+                  - memory-additive /
+                    memory-compressive: same texts as for instruct above.
+                  ('memory' is accepted as a deprecated alias for
+                   'memory-additive'.)
+            history_window: number of historical (obs, response) rounds to keep
+                with images. Total prompt images = history_window + 1
+                (current observation). Older steps are text-summarized.
+            keep_thinking_in_history: only applies when variant='thinking'. If
+                True, prior turns' <think>...</think> blocks are preserved in
+                the conversation history so the current turn can read them.
+                Default False (matches Qwen3 thinking template's standard
+                "non-thinking history + per-turn re-thinking" usage).
         """
         self.interaction_mode = interaction_mode
         self.variant = variant.lower()
         self.prompt_version = prompt_version.lower()
+        self.history_window = int(history_window)
+        self.keep_thinking_in_history = bool(keep_thinking_in_history)
 
         if self.variant not in ['instruct', 'thinking']:
             raise ValueError(f"Invalid variant: {variant}. Must be 'instruct' or 'thinking'")
 
-        if self.prompt_version not in ['vanilla', 'complete']:
-            raise ValueError(f"Invalid prompt_version: {prompt_version}. Must be 'vanilla' or 'complete'")
+        _allowed = self._allowed_prompt_versions(self.variant)
+        if self.prompt_version not in _allowed:
+            raise ValueError(
+                f"Invalid prompt_version '{prompt_version}' for variant '{self.variant}'. "
+                f"Must be one of {sorted(_allowed)}."
+            )
+
+        if self.history_window < 0:
+            raise ValueError(f"history_window must be >= 0, got {history_window}")
+
+    # ``complete`` (instruct) and ``memory`` (thinking) are deprecated aliases
+    # for ``memory-additive`` and continue to be accepted so that existing yamls
+    # don't break. New configs should use ``memory-additive`` /
+    # ``memory-compressive``.
+    _DEPRECATED_ALIASES = {
+        ("instruct", "complete"): "memory-additive",
+        ("thinking", "memory"): "memory-additive",
+    }
+
+    @staticmethod
+    def _allowed_prompt_versions(variant: str) -> set:
+        if variant == "instruct":
+            return {"vanilla", "progress", "memory-additive", "memory-compressive", "complete"}
+        if variant == "thinking":
+            return {"vanilla", "progress", "memory-additive", "memory-compressive", "memory"}
+        return set()
+
+    # Response-format strings keyed by (variant, prompt_version).
+    # ``memory-additive`` (5-section: Memory + Progress + Intention + Action +
+    # tool_call, with append-only Memory) is the canonical name for what was
+    # previously called ``complete`` (instruct) / ``memory`` (thinking).
+    # ``memory-compressive`` is the same 5-section layout but the Memory rule
+    # is swapped to compress-by-relevance instead of append-only.
+    # ``progress`` (thinking only) is the 3-section Progress + Action +
+    # tool_call layout.
+    _VANILLA_RESPONSE_FORMAT = """
+
+# Response format
+
+Response format for every step:
+1) Action: a short sentence describing what to do in the UI.
+2) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
+
+Rules:
+- Output exactly in the order: Action, <tool_call>.
+- Action describes the high-level intention of the tool call within a single sentence.
+- Do not output anything else outside those two parts."""
+
+    _MEMORY_ADDITIVE_RESPONSE_FORMAT = """
+
+# Response format
+
+Response format for every step:
+1) Memory: facts you would like to memorize for future actions in json format. Include the current step.
+2) Progress: Decompose the task into subtasks and what has been finished so far with json format. Include progress of the current step.
+3) Intention: clearly state which subtask you're working on at this step with the json key.
+4) Action: a short sentence describing what to do in the UI to accomplish the next subtask.
+5) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
+
+Rules:
+- Output exactly in the order: Memory, Progress, Intention, Action, <tool_call>.
+- You MUST use json format for the Memory and Progress parts.
+- Example Task: "Search and compare the prices and locations of product 1 and product 2 on Amazon."
+  - Example of Memory json format: {"Price of product 1": "10.00", "Location of product 1": "10.00", "Price of produce 2": "12.00"}.
+  - Example of Progress json format: {"Go to Amazon.com": "finished", "Search for price of product 1": "finished", "Search for location of product 1": "finished", "Search for price of product 2": "finished", "Search for location of product 2": "not finished", "Compare product 1 and product 2": "not finished"}.
+  - Example of Intention json key format: "Search for location of product 2".
+- You CAN NOT modify previous Memory. Only append to it.
+- You CAN modify Progress from previous conversation to further decompose the task and guide your next action.
+  - For example, if the previous assistant message specifies Progress: {"Go to Amazon.com": "finished", "Search for product 1": "finished", "Search for product 2": "not finished", "Compare product 1 and 2": "not finished"},
+  - You should further decompose "Search for product 1" and "Search for product 2" into "Search for price of product 1" and "Search for location of product 1", and "Search for price of product 2" and "Search for location of product 2".
+- Do not output anything else outside those five parts."""
+
+    _MEMORY_COMPRESSIVE_RESPONSE_FORMAT = _MEMORY_ADDITIVE_RESPONSE_FORMAT.replace(
+        "- You CAN NOT modify previous Memory. Only append to it.",
+        "- Each step, you should COMPRESS previous memory by indentifying only those relevant.",
+    )
+
+    _PROGRESS_RESPONSE_FORMAT = """
+
+# Response format
+
+Response format for every step:
+1) Progress: Decompose the task into subtasks and track what has been finished so far in json format. If you see any information on screen that may be useful for solving the task (e.g., prices, names, dates, answers), record it in Progress as well.
+2) Action: a short sentence describing what to do in the UI.
+3) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
+
+Rules:
+- Output exactly in the order: Progress, Action, <tool_call>.
+- You MUST use json format for Progress.
+- The json keys in Progress do not need to match previous steps exactly. You may freely add, remove, or rename keys as the task evolves. However, be careful not to lose information when renaming or removing keys — carry forward any useful facts gathered in earlier steps.
+- For tokens between </think> and <|im_end|>, do not put anything else outside those three parts."""
+
+    # Instruct variant gets the same 3-section Progress/Action/<tool_call>
+    # layout but without the </think> rule (instruct has no thinking phase).
+    _PROGRESS_INSTRUCT_RESPONSE_FORMAT = """
+
+# Response format
+
+Response format for every step:
+1) Progress: Decompose the task into subtasks and track what has been finished so far in json format. If you see any information on screen that may be useful for solving the task (e.g., prices, names, dates, answers), record it in Progress as well.
+2) Action: a short sentence describing what to do in the UI.
+3) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
+
+Rules:
+- Output exactly in the order: Progress, Action, <tool_call>.
+- You MUST use json format for Progress.
+- The json keys in Progress do not need to match previous steps exactly. You may freely add, remove, or rename keys as the task evolves. However, be careful not to lose information when renaming or removing keys — carry forward any useful facts gathered in earlier steps.
+- Do not output anything else outside those three parts."""
+
+    @classmethod
+    def _response_format_for(cls, variant: str, prompt_version: str) -> str:
+        # Resolve deprecated aliases to their canonical name.
+        prompt_version = cls._DEPRECATED_ALIASES.get(
+            (variant, prompt_version), prompt_version
+        )
+        if prompt_version == "vanilla":
+            return cls._VANILLA_RESPONSE_FORMAT
+        if prompt_version == "memory-additive":
+            return cls._MEMORY_ADDITIVE_RESPONSE_FORMAT
+        if prompt_version == "memory-compressive":
+            return cls._MEMORY_COMPRESSIVE_RESPONSE_FORMAT
+        if (variant, prompt_version) == ("thinking", "progress"):
+            return cls._PROGRESS_RESPONSE_FORMAT
+        if (variant, prompt_version) == ("instruct", "progress"):
+            return cls._PROGRESS_INSTRUCT_RESPONSE_FORMAT
+        raise ValueError(
+            f"No response format defined for variant={variant!r}, prompt_version={prompt_version!r}"
+        )
 
     def build_conversation(self, task: str, trajectory: List[Dict], current_observation: Dict, **kwargs) -> List[Dict]:
         """
@@ -43,22 +202,22 @@ class QwenConversationBuilder(ConversationBuilder):
             List of message dicts (system, user, assistant alternating)
         """
         messages = []
-        HISTORY_WINDOW = 4  # Keep last 4 rounds as explicit history
+        HISTORY_WINDOW = self.history_window  # Number of historical rounds with images
 
         # 1. System message with tool definition
         messages.append(self._build_system_message())
 
         num_steps = len(trajectory)
 
-        # Determine which steps go into rolling history (last 4 rounds + current observation = 5 images)
-        # Note: A "round" is (observation, response) pair. We need 4 complete rounds + current observation.
-        # This gives us 5 observations total: [obs_n-4, obs_n-3, obs_n-2, obs_n-1, obs_current]
+        # Determine which steps go into rolling history.
+        # Total prompt images = HISTORY_WINDOW + 1 (HISTORY_WINDOW rounds + current obs).
+        # A "round" is (observation, response) pair.
         if num_steps <= HISTORY_WINDOW + 1:
-            # All steps fit in window (need HISTORY_WINDOW+1 to account for 4 rounds + current)
+            # All steps fit in window
             rolling_history_start = 0
             older_steps = []
         else:
-            # Split: older steps get summarized, last 5 observations (4 rounds + current) get full treatment
+            # Split: older steps get summarized, last (HISTORY_WINDOW+1) observations get full treatment
             rolling_history_start = num_steps - HISTORY_WINDOW - 1
             older_steps = trajectory[:rolling_history_start]
 
@@ -123,47 +282,8 @@ class QwenConversationBuilder(ConversationBuilder):
         else:
             tool_def = self._get_set_of_marks_tool_def()
 
-        # Add response format based on prompt_version
-        response_format = ""
-        if self.prompt_version == "complete":
-            # Complete version: includes Progress, Intention, Action, and tool call
-            response_format = """
-
-# Response format
-
-Response format for every step:
-1) Memory: facts you would like to memorize for future actions in json format. Include the current step.
-2) Progress: Decompose the task into subtasks and what has been finished so far with json format. Include progress of the current step.
-3) Intention: clearly state which subtask you're working on at this step with the json key.
-4) Action: a short sentence describing what to do in the UI to accomplish the next subtask.
-5) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
-
-Rules:
-- Output exactly in the order: Memory, Progress, Intention, Action, <tool_call>.
-- You MUST use json format for the Memory and Progress parts.
-- Example Task: "Search and compare the prices and locations of product 1 and product 2 on Amazon."
-  - Example of Memory json format: {"Price of product 1": "10.00", "Location of product 1": "10.00", "Price of produce 2": "12.00"}.
-  - Example of Progress json format: {"Go to Amazon.com": "finished", "Search for price of product 1": "finished", "Search for location of product 1": "finished", "Search for price of product 2": "finished", "Search for location of product 2": "not finished", "Compare product 1 and product 2": "not finished"}.
-  - Example of Intention json key format: "Search for location of product 2".
-- You CAN NOT modify previous Memory. Only append to it.
-- You CAN modify Progress from previous conversation to further decompose the task and guide your next action.
-  - For example, if the previous assistant message specifies Progress: {"Go to Amazon.com": "finished", "Search for product 1": "finished", "Search for product 2": "not finished", "Compare product 1 and 2": "not finished"},
-  - You should further decompose "Search for product 1" and "Search for product 2" into "Search for price of product 1" and "Search for location of product 1", and "Search for price of product 2" and "Search for location of product 2".
-- Do not output anything else outside those five parts."""
-        else:
-            # Vanilla version: minimal format without Thoughts or Memory
-            response_format = """
-
-# Response format
-
-Response format for every step:
-1) Action: a short sentence describing what to do in the UI.
-2) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
-
-Rules:
-- Output exactly in the order: Action, <tool_call>.
-- Action describes the high-level intention of the tool call within a single sentence.
-- Do not output anything else outside those two parts."""
+        # Dispatch response_format by (variant, prompt_version).
+        response_format = self._response_format_for(self.variant, self.prompt_version)
 
         system_content = f"""You are a helpful assistant.
 
@@ -347,17 +467,31 @@ For each function call, return a JSON object with function name and arguments wi
         # Get full response (thinking + answer tokens for thinking variant)
         raw_response = response.raw_response
 
+        # Strip special tokens that the tokenizer may have included
+        # (e.g. <|im_end|> EOS). Leaving them in causes double <|im_end|>
+        # after apply_chat_template wraps the message.
+        raw_response = raw_response.replace("<|im_end|>", "").rstrip()
+
         # For thinking variant, exclude thinking tokens from conversation history
-        # Only include answer tokens so model doesn't see previous thinking
-        if self.variant == 'thinking':
+        # Only include answer tokens so model doesn't see previous thinking,
+        # unless keep_thinking_in_history is True (then preserve <think>...</think>).
+        if self.variant == 'thinking' and not self.keep_thinking_in_history:
             import re
             # Remove <think>...</think> blocks to get answer tokens only
             answer_tokens = re.sub(r'<think>.*?</think>', '', raw_response, flags=re.DOTALL)
             # Also handle case where thinking doesn't have opening tag (auto-start)
             answer_tokens = re.sub(r'^.*?</think>\s*', '', answer_tokens, flags=re.DOTALL)
             answer_tokens = answer_tokens.strip()
+
+            # Handle truncated thinking: if max_new_tokens cut off the output
+            # mid-thinking, there is no </think> tag and the regexes above
+            # fail silently — leaking the full thinking content into history.
+            # Detect this by checking if <think> survived the strip.
+            if '<think>' in answer_tokens:
+                answer_tokens = re.sub(r'<think>.*', '', answer_tokens, flags=re.DOTALL).strip()
         else:
-            # For non-thinking variants, all tokens are answer tokens
+            # Either non-thinking variant, or keep_thinking_in_history=True:
+            # all tokens (including any <think>...</think>) flow into history.
             answer_tokens = raw_response
 
         return {

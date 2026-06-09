@@ -1,5 +1,8 @@
-scripts/outputs/
-scripts/wandb/
+.venv/
+wandb/
+.tmp_pip_cache/
+.tmp_pylib/
+session_log.jsonl
 scripts/download/
 __pycache__/
 # .gitignore
@@ -9,6 +12,7 @@ __pycache__/
 *.pyc
 *.png
 !figures/*
+!assets/banner.png
 *.pdf
 *.html
 
@@ -27,8 +31,9 @@ scripts/outputs/
 outputs/
 scripts/wandb/
 tree.out
-# Core dumps
-core
+# Core dumps (anchor to repo root so it doesn't match the
+# areal/engine/core/ package directory)
+/core
 core.*
 scripts/core
 analysis/core
@@ -41,7 +46,45 @@ node_modules/
 .nfs*
 *.nfs*
 /docs/_build/
-/docs/_static
-.gradio/
-.claude/
-omniboxes/deploy/redis-data/
+
+# Large files / media
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.safetensors
+*.bin
+*.ckpt
+report_video/frames/
+
+# Paper data dumps and intermediate figure outputs are NEVER committed.
+# Paper scripts under paper/paper_plots/scripts/ take explicit --data / --out
+# flags; the user is responsible for supplying external storage for these.
+/paper/paper_plots/dumps/
+/paper/paper_plots/figures/
+/analysis/
+
+# Stray $HOME dotfiles that can appear when the repo root is used as $HOME
+/.bash_profile
+/.bashrc
+/.gitconfig
+/.idea
+/.mcp.json
+/.profile
+/.ripgreprc
+/.vscode
+/.zprofile
+/.zshrc
+
+# Local-only — never pushed to the public repo.
+# Consolidated agent brief (replaces the former CLAUDE.md/AGENTS.md/.claude docs),
+# the functional Claude config, and the promo-video script + output.
+/CLAUDE.md
+/.claude/
+/video/
+/CHANGELOG.md
+
+# Gradio runtime artifacts (self-signed share cert, flagged files, etc.)
+/.gradio/

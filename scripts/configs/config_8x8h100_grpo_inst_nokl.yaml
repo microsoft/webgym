@@ -1,0 +1,329 @@
+# ──────────────────────────────────────────────
+# WebGym GRPO Instruct, no-KL — 8-node H100 reference config
+# ──────────────────────────────────────────────
+#
+# 8 H100 nodes (64 GPUs total). See allocation_mode below for the
+# rollout/actor GPU split. Replace the placeholder paths below with paths
+# on your own filesystem, and point the run at your WebGym/Omniboxes
+# endpoint. Launch with your scheduler of choice (Ray/Slurm/local).
+# ──────────────────────────────────────────────
+
+experiment_name: auto
+trial_name: intuition-model
+seed: 1
+enable_offload: true
+total_train_epochs: 10
+tokenizer_path: ${actor.path}
+
+cluster:
+  n_nodes: 8
+  n_gpus_per_node: 8
+  fileroot: /path/to/areal-fileroot
+  name_resolve:
+    type: ray
+
+# 48 GPUs sglang train-rollout + 16 GPUs FSDP actor = 64 GPUs.
+# An earlier d24+d40 split revealed that going d24 made rollout SLOWER, not
+# faster: with 24 sglang servers handling ~45 concurrent requests, queue
+# depth/latency rose and step 1 rollout went 17 min → 29 min vs d40.
+# Going the other direction: d48 sglang to push max concurrent request
+# headroom AND drop actor dp to d16 (since train was only 1.6 min on
+# d40 — plenty of headroom to give train GPUs back to rollout).
+# Per-rank FSDP shard becomes 8B/16=500M (vs 200M on d40) — fits well
+# under H100 80GB after activations.
+# Batch was bumped 120 → 128 because actor d16 requires batch_size % 16
+# == 0 (120/16=7.5 fails balanced_greedy_partition). 128/16=8 traj/rank,
+# 128/8=16 groups per train step, 128 also matches the paper's 128-batch
+# reference for constT10.
+allocation_mode: sglang[rollout]:d48+fsdp[actor]:d16
+
+scheduler:
+  type: ray
+
+rollout:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  setup_timeout: 1800
+  max_concurrent_rollouts: 1280
+  max_concurrent_per_worker: 32
+  queue_size: null
+  # 128 = LCM(n_samples=8, actor_dp=16) × 1 → 16 GRPO groups per train step,
+  # 8 trajectories per dp rank. Matches the paper's 128-batch reference for
+  # constT10. Bumped from 120 because actor d16 requires batch % 16 == 0
+  # (120/16=7.5 breaks balanced_greedy_partition). 128 still gives low
+  # per-step reward variance vs the earlier batch=24 setting (an earlier
+  # run showed reward swings 0.10-0.57 at batch=24 that were pure sampling
+  # noise, not policy regression).
+  consumer_batch_size: 128
+  max_head_offpolicyness: 2
+  enable_rollout_tracing: false
+  scheduling_spec: ${actor.scheduling_spec}
+  fileroot: ${cluster.fileroot}
+  tokenizer_path: ${tokenizer_path}
+  dump_to_file: true
+  unique_tasks: true
+
+gconfig:
+  n_samples: 8
+  min_new_tokens: 0
+  max_new_tokens: 4096
+  max_tokens: 16384
+  greedy: false
+  top_p: 1.0
+  temperature: 1.0
+
+actor:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  # Local HF copy required. SGLang produces garbage tokens (`)\n;\n}` etc.)
+  # when loading from HF Hub path on shared-GPU worker nodes. Pre-downloaded
+  # via snapshot_download; same location used by test_rollout.
+  path: /path/to/models/Qwen3-VL-8B-Instruct
+  init_from_scratch: false
+  disable_dropout: true
+  gradient_checkpointing: true
+  dtype: bfloat16
+  # Override FSDP wrap policy so AReaL uses this list directly instead of
+  # falling back to `model._no_split_modules`, which transformers 5.x returns
+  # as a `set` (breaks positional indexing in fsdp_utils).
+  fsdp:
+    wrap_policy:
+      transformer_layer_cls_to_wrap:
+        - Qwen3VLTextDecoderLayer
+        - Qwen3VLVisionBlock
+  mb_spec:
+    max_tokens_per_mb: 16384
+  optimizer:
+    type: adam
+    lr: 5.0e-6
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1e-8
+    lr_scheduler_type: cosine
+    lr_scheduler_max_steps: 300
+    min_lr_ratio: 0.1
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.0167
+  critic_loss: none
+  actor_loss: grpo
+  eps_clip: 0.2
+  # Cap the off-policy importance weight |π_new / π_behav| to 5.0. In an
+  # earlier run we observed a single spike to 14.65 at step 14 with cap=null,
+  # which produced a bad gradient and dropped reward to 0.103 at step 16.
+  # With cap=5 those rare spikes get clipped without affecting the ~99%
+  # of tokens whose ratio sits in [0.5, 3].
+  behav_imp_weight_cap: 5.0
+  reward_scaling: 1.0
+  reward_bias: 0.0
+  kl_ctl: 0.0
+  kl_use_prox: false
+  c_clip: 3.0
+  ppo_n_minibatches: 2
+  ppo_n_epochs: 3
+  recompute_logprob: true
+  use_decoupled_loss: true
+  reward_norm:
+    mean_level: group
+    std_level: group
+    group_size: ${gconfig.n_samples}
+  adv_norm: null
+  overlong_reward_penalty: false
+  weight_update_mode: xccl
+  max_new_tokens: ${gconfig.max_new_tokens}
+  # Paper §3.2 main fix ("constT10"): replaces the per-trajectory length
+  # normalizer 1/|τ_i| in the step-advantage with a CONSTANT 1/k = 1/10.
+  # Without this, shorter trajectories receive disproportionately large
+  # per-token gradient, pushing the actor to prefer "short but worse"
+  # episodes — observed as monotonically declining rollout/reward in a
+  # baseline run despite stable KL and entropy.
+  step_adv_const_length: 10.0
+  scheduling_spec:
+    - task_type: worker
+      port_count: 2
+      gpu: 1
+      mem: 32
+      cmd: python3 -m areal.infra.rpc.rpc_server
+      env_vars:
+        SGLANG_VLM_CACHE_SIZE_MB: "8192"
+        PYTORCH_ALLOC_CONF: "expandable_segments:True"
+        # NOTE: SGLANG_DISABLE_CUDNN_CHECK was removed. With PyTorch 2.9.1 and
+        # cuDNN < 9.15 there is a known nn.Conv3d bug that silently produces
+        # garbage vision features for Qwen3-VL (model outputs `)\n;\n}` etc.).
+        # See sglang/srt/server_args.py:check_torch_2_9_1_cudnn_compatibility.
+        # Keep the check ENABLED so the regression cannot be silently masked.
+        # cuDNN must be >= 9.15 (we pin cudnn-cu12==9.16.0.29 in pyproject).
+        WEBGYM_SKIP_IMAGE_JUDGE: "0"
+
+ref:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: ${actor.path}
+  init_from_scratch: false
+  disable_dropout: true
+  gradient_checkpointing: true
+  dtype: bfloat16
+  fsdp:
+    wrap_policy:
+      transformer_layer_cls_to_wrap:
+        - Qwen3VLTextDecoderLayer
+        - Qwen3VLVisionBlock
+  mb_spec:
+    max_tokens_per_mb: 16384
+  scheduling_spec: ${actor.scheduling_spec}
+  scheduling_strategy:
+    type: colocation
+    target: actor
+
+critic: null
+
+sglang:
+  model_path: ${actor.path}
+  random_seed: ${seed}
+  skip_tokenizer_init: true
+  dtype: ${actor.dtype}
+  max_running_requests: 48
+  context_length: 16384
+  mem_fraction_static: 0.75
+  enable_multimodal: true
+  attention_backend: flashinfer
+
+vllm:
+  model: ${actor.path}
+  seed: ${seed}
+  skip_tokenizer_init: false
+  dtype: ${actor.dtype}
+  max_model_len: 32768
+  gpu_memory_utilization: 0.9
+
+# ──────────────────────────────────────────────
+# Datasets — place the WebGym task jsonl files at these paths.
+# Get them from the HuggingFace dataset microsoft/webgym_tasks
+# ({train,test}.jsonl).
+# ──────────────────────────────────────────────
+train_dataset:
+  batch_size: 128
+  shuffle: true
+  pin_memory: true
+  num_workers: 4
+  path: /path/to/webgym_tasks/train.jsonl
+  type: rl
+  max_length: 32768
+
+valid_dataset:
+  batch_size: 32
+  pin_memory: true
+  num_workers: 4
+  path: /path/to/webgym_tasks/test.jsonl
+  type: rl
+
+# ──────────────────────────────────────────────
+# WebGym — per-node Omniboxes on localhost (started by the sbatch wrapper).
+# ──────────────────────────────────────────────
+webgym:
+  host_ip: "127.0.0.1"
+  master_port: 8443
+  cpu_cluster_token_env_var: "CPU_CLUSTER_TOKEN"
+  interaction_mode: "coordinates"
+  turn_discount: 1.0
+  train_difficulty_max_steps:
+    easy: 10
+    medium: 20
+    hard: 30
+  test_difficulty_max_steps:
+    easy: 30
+    medium: 50
+    hard: 70
+  operation_timeout: 120
+  episode_timeout_minutes: 45
+  max_retries: 2
+  instance_lifetime_mins: 60
+  monitor_port: 5000
+  head_node_concurrency_discount: 0.8
+  model_type: "qwen3-instruct"
+  prompt_version: "complete"
+  history_window: 1
+  adaptive_sampling:
+    enabled: false
+    target_p: 0.45
+    epsilon: 0.1
+    alpha: 0.3
+    min_samples: 2
+    bert_predictor: false
+    bert_model: distilbert-base-uncased
+    min_training_samples: 20
+    bert_epochs: 10
+    bert_lr: 2.0e-5
+
+# ──────────────────────────────────────────────
+# Evaluator: Gemini (external API). Optional; falls back to rule-based.
+# ──────────────────────────────────────────────
+openai_config:
+  model: "gemini-2.5-flash"
+  openai_api_key_env_var: "GEMINI_API_KEY"
+  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# ──────────────────────────────────────────────
+# Test rollout. base_model_checkpoint points at a pre-saved local HF copy
+# of Qwen3-VL-8B-Instruct; SGLang update_weights_from_disk fails on Hub
+# refs on shared-GPU worker nodes (see CLAUDE.md). Pre-download once.
+# ──────────────────────────────────────────────
+test_rollout:
+  enabled: false
+  n_gpus: 8
+  max_new_tokens: 4096
+  greedy: true
+  max_tasks: null
+  max_concurrent_per_gpu: 24
+  base_model_checkpoint: /path/to/models/Qwen3-VL-8B-Instruct
+
+# ──────────────────────────────────────────────
+# Utilities
+# ──────────────────────────────────────────────
+saver:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: null
+  freq_steps: null
+  freq_secs: null
+
+recover:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: null
+  freq_steps: null
+  # If your scheduler enforces a wall-clock limit, periodic recover
+  # checkpoints guard against losing training progress on autokill. With
+  # steady state ~11 min/step this saves a checkpoint roughly every 2
+  # steps; only the most recent is used on resume. Cheap insurance (each
+  # checkpoint is model + optim shards, ~50GB total for 8B BF16 + Adam
+  # fp32, written async by Saver).
+  freq_secs: 1200
+
+evaluator:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: null
+
+stats_logger:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  wandb:
+    mode: online
+    project: rl
+    entity: webgym
+    id_suffix: timestamp
+
+perf_tracer:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  enabled: true
+  session_tracer:
+    enabled: true

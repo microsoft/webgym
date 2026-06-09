@@ -8,20 +8,42 @@ from .conversation_builder import QwenConversationBuilder
 class Qwen3VLInterface(ModelInterface):
     """Qwen3-VL specific implementation"""
 
-    def __init__(self, interaction_mode: str, variant: str = "instruct", prompt_version: str = "vanilla"):
+    def __init__(
+        self,
+        interaction_mode: str,
+        variant: str = "instruct",
+        prompt_version: str = "vanilla",
+        history_window: int = 4,
+        keep_thinking_in_history: bool = False,
+    ):
         """
         Initialize Qwen3-VL interface
 
         Args:
             interaction_mode: 'coordinates' or 'set_of_marks'
             variant: 'instruct' or 'thinking'
-            prompt_version: 'vanilla' or 'complete'
+            prompt_version: valid values depend on ``variant``.
+                instruct: 'vanilla' | 'complete'
+                thinking: 'vanilla' | 'progress' | 'memory'
+                See QwenConversationBuilder for the section layout each entails.
+            history_window: number of historical (obs, response) rounds to keep with
+                images in the prompt. Total prompt images = history_window + 1
+                (current observation). Older steps are summarized as text. Default 4.
+            keep_thinking_in_history: if True (and variant='thinking'), keep
+                prior turns' <think>...</think> blocks in conversation history
+                so the current turn can read them. Default False.
         """
         super().__init__()
         self.interaction_mode = interaction_mode
         self.variant = variant.lower()
         self.prompt_version = prompt_version.lower()
-        self.conversation_builder = QwenConversationBuilder(interaction_mode, variant, prompt_version)
+        self.history_window = int(history_window)
+        self.keep_thinking_in_history = bool(keep_thinking_in_history)
+        self.conversation_builder = QwenConversationBuilder(
+            interaction_mode, variant, prompt_version,
+            history_window=self.history_window,
+            keep_thinking_in_history=self.keep_thinking_in_history,
+        )
 
     def parse_response(self, raw_response: str) -> Dict[str, Any]:
         """

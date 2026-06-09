@@ -33,6 +33,9 @@ class Evaluator:
                 Required keys:
                     - model: Default model name
                 Optional keys:
+                    - provider: "azure" or omit for OpenAI/Gemini (default: None)
+                    - azure_endpoint: Azure endpoint (required if provider is "azure")
+                    - azure_api_version: Azure API version (required if provider is "azure")
                     - openai_api_key_env_var: Env var for API key (default: OPENAI_API_KEY)
                     - base_url: Base URL for API (default: None for OpenAI)
                     - keypoint_detection: Override config for keypoint/image relevance detection
@@ -50,6 +53,14 @@ class Evaluator:
 
         # Cache for clients (keyed by (api_key_env_var, base_url))
         self._clients = {}
+
+        # Multi-endpoint Azure clients. `multi_endpoint_client` is the default
+        # (covers all tasks without a per-task override). `_task_multi_clients`
+        # maps task_type → dedicated MultiEndpointAzureOpenAI when that task
+        # provides its own `config_dir` — e.g. offloading the image-relevance
+        # judge to a larger / cheaper pool like gpt-4.1-mini.
+        self.multi_endpoint_client = None
+        self._task_multi_clients: Dict[str, Any] = {}
 
         # Initialize clients for all configured tasks
         self._setup_clients()
@@ -101,10 +112,48 @@ class Evaluator:
 
     def _get_client_and_model(self, task_type: str) -> Tuple[Any, str]:
         """Get the client and model name for a specific task type."""
+        # Azure multi-endpoint path: task-specific pool overrides the default.
+        # Lets one task (e.g. the per-image judge) be offloaded to a bigger /
+        # cheaper pool like gpt-4.1-mini while the rest stay on gpt-4o.
+        if task_type in self._task_multi_clients:
+            task_client = self._task_multi_clients[task_type]
+            task_model = self.openai_config.get(task_type, {}).get(
+                "model", self.reward_model_name
+            )
+            return task_client, task_model
+        if self.multi_endpoint_client is not None:
+            # For Azure, the model is the deployment name (same for all tasks in current setup)
+            return self.multi_endpoint_client, self.reward_model_name
+
+        # Otherwise use standard per-task client configuration
         config = self._get_task_config(task_type)
         client = self._get_client_for_config(config)
         model = config["model"]
         return client, model
+
+    def _create_chat_completion(self, client: Any, model: str, messages: List[Dict], **kwargs):
+        """Create chat completion, handling both standard OpenAI and Azure multi-endpoint clients."""
+        # Check if this is the multi-endpoint Azure client
+        if hasattr(client, 'chat_completion'):
+            # Azure multi-endpoint client
+            response = client.chat_completion(messages=messages, **kwargs)
+            # Return in OpenAI format
+            class CompletionChoice:
+                def __init__(self, content):
+                    self.message = type('obj', (object,), {'content': content})
+
+            class Completion:
+                def __init__(self, content):
+                    self.choices = [CompletionChoice(content)]
+
+            return Completion(response['choices'][0]['message']['content'])
+        else:
+            # Standard OpenAI/Gemini client
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+                **kwargs
+            )
 
     def _setup_clients(self):
         """Setup clients for all task types and validate configuration."""
@@ -112,6 +161,15 @@ class Evaluator:
         if not self.openai_config.get("model"):
             raise ValueError("model must be specified in openai_config")
 
+        # Check if using Azure provider
+        provider = self.openai_config.get('provider', '').lower()
+
+        if provider == 'azure':
+            # Setup Azure multi-endpoint client
+            self._setup_azure_client()
+            return
+
+        # Otherwise, setup standard OpenAI/Gemini clients
         # Pre-initialize clients for all task types to catch config errors early
         task_types = [
             self.TASK_KEYPOINT_DETECTION,
@@ -150,18 +208,32 @@ class Evaluator:
                 - evaluation_text: String or list of evaluation responses
                 - is_blocked: True if website blocked the agent, False otherwise
         """
-        # STEP 0: Judge which images should be submitted
-        print("📋 Step 0: Judging which images contain necessary task information...")
-        try:
-            self.judge_submission_images(trajectory)
-        except Exception as e:
-            print(f"⚠️ Image judging crashed (content filter?), marking all images for submission: {e}")
+        # STEP 0: Judge which images should be submitted.
+        # This step dominates GPT-4o traffic: ~1 call per image × ~15 images
+        # per trajectory = >85% of all evaluator API calls. Under training load
+        # (26 concurrent rollouts × 32 thread-pool each) it becomes the rollout
+        # bottleneck — endpoints hit Azure per-deployment RPS caps long before
+        # the cluster fills. Set WEBGYM_SKIP_IMAGE_JUDGE=1 to bypass: mark
+        # every screenshot submit=True so the downstream B/A calls see the
+        # raw last-N-images window (still capped at 48 by the existing slice).
+        # Trade-off: B/A get more screenshots as input (larger single call,
+        # ~10× input tokens) but we eliminate the N-way per-image fan-out.
+        if os.environ.get("WEBGYM_SKIP_IMAGE_JUDGE", "").lower() in ("1", "true", "yes"):
+            print("📋 Step 0: SKIPPED (WEBGYM_SKIP_IMAGE_JUDGE=1) — all screenshots marked submit=True")
             for step in trajectory:
                 if step.get('observation') and hasattr(step['observation'], 'image_path'):
                     if 'reward' not in step or step['reward'] is None:
-                        step['reward'] = Reward(reward=0, evaluation="", submit=True, submission_judgment="fallback")
+                        step['reward'] = Reward(
+                            reward=0,
+                            evaluation="",
+                            submit=True,
+                            submission_judgment="skipped (WEBGYM_SKIP_IMAGE_JUDGE)",
+                        )
                     else:
                         step['reward'].submit = True
+        else:
+            print("📋 Step 0: Judging which images contain necessary task information...")
+            self.judge_submission_images(trajectory)
 
         # STEP 1: Check for blocking ONCE for the entire trajectory (independent of rubrics)
         is_blocked = self.check_if_blocked(trajectory)
@@ -219,14 +291,14 @@ class Evaluator:
             ]
 
             # Call API
-            completion = eval_client.chat.completions.create(
-                model=eval_model,
-                messages=messages,
+            completion = self._create_chat_completion(
+                eval_client,
+                eval_model,
+                messages,
                 max_tokens=800,
                 temperature=0.7,
                 top_p=0.95,
                 stream=False
-                #reasoning_effort="minimal"  # add this only for reasoning models
             )
             response = completion.choices[0].message.content
 
@@ -287,14 +359,14 @@ class Evaluator:
                 ]
 
                 # Call API
-                completion = eval_client.chat.completions.create(
-                    model=eval_model,
-                    messages=messages,
+                completion = self._create_chat_completion(
+                    eval_client,
+                    eval_model,
+                    messages,
                     max_tokens=800,
                     temperature=0.7,
                     top_p=0.95,
                     stream=False
-                    #reasoning_effort="minimal"  # add this only for reasoning models
                 )
                 response = completion.choices[0].message.content
 
@@ -344,14 +416,14 @@ The agent's response should either:
                     }
                 ]
 
-                completion = eval_client.chat.completions.create(
-                    model=eval_model,
-                    messages=messages,
+                completion = self._create_chat_completion(
+                    eval_client,
+                    eval_model,
+                    messages,
                     max_tokens=800,
                     temperature=0.7,
                     top_p=0.95,
                     stream=False
-                    #reasoning_effort="minimal"  # add this only for reasoning models
                 )
                 response = completion.choices[0].message.content
 
@@ -459,14 +531,14 @@ The agent's response should either:
             ]
 
             # Call API
-            completion = blocking_client.chat.completions.create(
-                model=blocking_model,
-                messages=messages,
+            completion = self._create_chat_completion(
+                blocking_client,
+                blocking_model,
+                messages,
                 max_tokens=500,
                 temperature=0.7,
                 top_p=0.95,
                 stream=False
-                #reasoning_effort="minimal"  # add this only for reasoning models
             )
             response = completion.choices[0].message.content
 
@@ -576,14 +648,14 @@ The snapshot of the web page is shown in the image. Does this image contain rele
                     ]
 
                     # Call API using task-specific client and model
-                    completion = keypoint_client.chat.completions.create(
-                        model=keypoint_model,
-                        messages=messages,
+                    completion = self._create_chat_completion(
+                        keypoint_client,
+                        keypoint_model,
+                        messages,
                         max_tokens=600,
                         temperature=0.7,
                         top_p=0.95,
                         stream=False
-                        #reasoning_effort="minimal"  # add this only for reasoning models
                     )
                     response = completion.choices[0].message.content
 
@@ -726,14 +798,14 @@ Response format:
             ]
 
             # Call API
-            completion = blocking_client.chat.completions.create(
-                model=blocking_model,
-                messages=messages,
+            completion = self._create_chat_completion(
+                blocking_client,
+                blocking_model,
+                messages,
                 max_tokens=300,
                 temperature=0.3,  # Lower temperature for more consistent detection
                 top_p=0.95,
                 stream=False
-                #reasoning_effort="minimal"  # add this only for reasoning models
             )
             response = completion.choices[0].message.content
 
@@ -766,3 +838,102 @@ Response format:
 
         # Return None for blocking status (handled separately now)
         return reward, None
+
+    def _setup_azure_client(self):
+        """Setup Azure OpenAI client with multi-endpoint support"""
+        try:
+            from webgym.environment.multi_endpoint_azure_client import MultiEndpointAzureOpenAI
+
+            config_dir = self.openai_config.get('config_dir')
+            if not config_dir:
+                raise ValueError("config_dir must be specified in openai_config when provider is 'azure'")
+
+            if self.verbose:
+                print(f"🚀 Setting up multi-endpoint Azure OpenAI client from {config_dir}")
+
+            self.multi_endpoint_client = MultiEndpointAzureOpenAI(
+                config_dir=config_dir,
+                max_concurrent=50
+            )
+
+            # Model name comes from the config files; keep openai_config model as the reward_model_name
+            self.reward_model_name = self.openai_config.get('model', 'gpt-4o')
+
+            if self.verbose:
+                print(f"✅ Multi-endpoint Azure OpenAI client initialized:")
+                print(f"   - Model: {self.reward_model_name}")
+                print(f"   - Deployments: {len(self.multi_endpoint_client.endpoints)}")
+
+            # Optional per-task dedicated pools. Each MultiEndpointAzureOpenAI
+            # round-robins (random uniform) across its own endpoint set, so
+            # offloading a task to its own pool both expands total RPS and
+            # isolates it from other tasks' pressure.
+            for task_type in (
+                self.TASK_KEYPOINT_DETECTION,
+                self.TASK_BLOCKING_DETECTION,
+                self.TASK_EVALUATION,
+            ):
+                task_cfg_dir = self.openai_config.get(task_type, {}).get("config_dir")
+                if task_cfg_dir and task_cfg_dir != config_dir:
+                    self._task_multi_clients[task_type] = MultiEndpointAzureOpenAI(
+                        config_dir=task_cfg_dir,
+                        max_concurrent=50,
+                    )
+                    if self.verbose:
+                        task_model = self.openai_config.get(task_type, {}).get(
+                            "model", "?"
+                        )
+                        print(
+                            f"✅ Per-task client '{task_type}' → {task_model} "
+                            f"({len(self._task_multi_clients[task_type].endpoints)} "
+                            f"deployments, {task_cfg_dir})"
+                        )
+
+            self.client = None  # Not used when multi_endpoint_client is available
+
+        except ImportError as e:
+            if self.verbose:
+                print(f"⚠️  Multi-endpoint client not available ({e}), falling back to simple Azure client")
+            self._setup_simple_azure_client()
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Failed to setup multi-endpoint client ({e}), falling back to simple Azure client")
+            self._setup_simple_azure_client()
+
+    def _setup_simple_azure_client(self):
+        """Setup simple Azure OpenAI client (fallback)"""
+        from azure.identity import AzureCliCredential, ManagedIdentityCredential, get_bearer_token_provider
+        from openai import AzureOpenAI
+
+        # All values must come from config
+        endpoint = self.openai_config.get('azure_endpoint')
+        if not endpoint:
+            raise ValueError("azure_endpoint must be specified in openai_config")
+
+        self.reward_model_name = self.openai_config.get('model')
+        if not self.reward_model_name:
+            raise ValueError("model must be specified in openai_config")
+
+        api_version = self.openai_config.get('azure_api_version')
+        if not api_version:
+            raise ValueError("azure_api_version must be specified in openai_config")
+
+        if 'AZURE_CLIENT_ID' in os.environ:
+            token_provider = get_bearer_token_provider(
+                ManagedIdentityCredential(client_id=os.environ['AZURE_CLIENT_ID']),
+                "https://cognitiveservices.azure.com/.default"
+            )
+        else:
+            token_provider = get_bearer_token_provider(
+                AzureCliCredential(),
+                "https://cognitiveservices.azure.com/.default"
+            )
+
+        self.client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            azure_ad_token_provider=token_provider,
+            api_version=api_version,
+        )
+        self.multi_endpoint_client = None  # Mark as not available
+        if self.verbose:
+            print(f"✅ Azure OpenAI client initialized with endpoint: {endpoint}, model: {self.reward_model_name}")

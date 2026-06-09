@@ -309,9 +309,7 @@ def load_all_trajectories(
     if not os.path.exists(traj_dir):
         raise FileNotFoundError(
             f"Trajectory directory not found: {traj_dir}\n"
-            f"Please ensure trajectories are saved using the incremental format.\n"
-            f"To migrate legacy files, run:\n"
-            f"  python scripts/migrate_to_incremental_trajectories.py --save_path {base_dir} --split {split}"
+            f"Please ensure trajectories are saved using the incremental format."
         )
 
     # Find all iteration files (excluding rank-specific files)

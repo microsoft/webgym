@@ -1,4 +1,7 @@
 #!/bin/bash
-# Clean and rebuild documentation
+# Build the docs.
+#   English -> _build/html
+set -e
 cd "$(dirname "$0")"
-make clean && make html
+sphinx-build -b html . _build/html
+echo "Built: _build/html"

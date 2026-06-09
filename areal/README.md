@@ -1,0 +1,1 @@
+This code is based on AReaL, which has an [Apache 2.0 License](https://github.com/areal-project/AReaL/blob/main/LICENSE).
